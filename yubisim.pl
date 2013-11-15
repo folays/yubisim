@@ -21,19 +21,25 @@ use Fcntl qw(:flock);
 use Data::Dumper;
 use Data::Hexdumper;
 
-my %long_opts = ();
+my $conf;
 if (open FILE, "<", "$ENV{HOME}/.yubisim.conf")
 {
     my $data = do { local $/ = undef; <FILE> };
-    my $json = decode_json($data) or die;
-    @long_opts{keys %$json} = values %$json;
+    $conf = decode_json($data) or die;
     close FILE;
+}
+
+my %long_opts = ();
+if ($conf->{options})
+{
+    @long_opts{keys %{$conf->{options}}} = values %{$conf->{options}};
 }
 GetOptions("test" => \$long_opts{test},
 	   "debug" => \$long_opts{debug},
 	   "pub=s" => \$long_opts{public_id},
 	   "sec=s" => \$long_opts{secret_id},
 	   "key=s" => \$long_opts{aes_key},
+	   "name=s" => \$long_opts{name},
     ) or die "bad options";
 
 if ($long_opts{test})
@@ -48,6 +54,17 @@ if ($long_opts{test})
 }
 else
 {
+    if ($long_opts{name})
+    {
+	($long_opts{public_id}) = grep { ($conf->{yubikeys}->{$_}->{name} || "") eq $long_opts{name} } keys %{$conf->{yubikeys}}
+    }
+    if ($long_opts{public_id} && exists($conf->{yubikeys}->{$long_opts{public_id}}))
+    {
+	foreach my $param (qw(secret_id aes_key))
+	{
+	    $long_opts{$param} ||= $conf->{yubikeys}->{$long_opts{public_id}}->{$param};
+	}
+    }
     die "public_id must be 12 modhex characters long" unless $long_opts{public_id} =~ m/^[cbdefghijklnrtuv]{1,12}$/o;
     $long_opts{public_id} = ("t" x (12 - length($long_opts{public_id}))).$long_opts{public_id};
     die "secret_id must be 12 hex characters long" unless $long_opts{secret_id} =~ m/^[0-9a-z]{12,12}$/o;
@@ -85,21 +102,21 @@ sub get_yubikey_global_counter_inc($)
 {
     my ($public_id) = @_;
 
-    open LOCK, ">", "$ENV{HOME}/.yubisim.counters.lock" or die;
+    open LOCK, ">", "$ENV{HOME}/.yubisim.lock" or die;
     flock(LOCK, LOCK_EX) or die;
     my $json;
-    if (open FILE, "<", "$ENV{HOME}/.yubisim.counters")
+    if (open FILE, "<", "$ENV{HOME}/.yubisim.conf")
     {
 	my $data = do { local $/ = undef; <FILE> };
 	$json = decode_json($data) or die;
 	close FILE or die;
     }
-    my $yubi = $json->{$public_id} ||= {global_counter => 255};
-    my $counter = $json->{$public_id}->{global_counter}++;
-    open FILE, ">", "$ENV{HOME}/.yubisim.counters.tmp" or die;
+    my $yubikey = $json->{yubikeys}->{$public_id} ||= {global_counter => 255};
+    my $counter = $yubikey->{global_counter}++;
+    open FILE, ">", "$ENV{HOME}/.yubisim.tmp" or die;
     print FILE encode_json($json);
     close FILE or die;
-    rename "$ENV{HOME}/.yubisim.counters.tmp", "$ENV{HOME}/.yubisim.counters" or die;
+    rename "$ENV{HOME}/.yubisim.tmp", "$ENV{HOME}/.yubisim.conf" or die;
     close LOCK or die;
     return $counter;
 }
